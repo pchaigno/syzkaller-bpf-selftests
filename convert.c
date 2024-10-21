@@ -469,6 +469,10 @@ static void bpf_fill_big_prog_with_loop_1(struct bpf_test *self)
     assert(i == len);
 }
 
+void insn_to_hex_string(struct bpf_insn *insn, char *hex_string) {
+    sprintf(&hex_string[0], "{0x%02x, 0x%01x, 0x%01x, 0x%04x, 0x%08x}", insn->code, insn->dst_reg, insn->src_reg, insn->off, insn->imm);
+}
+
 static struct bpf_test tests[] = {
 #include "verifier/atomic_and.c"
 #include "verifier/atomic_bounds.c"
@@ -507,4 +511,89 @@ static struct bpf_test tests[] = {
 #include "verifier/wide_access.c"
 };
 
-void main() {}
+int main(int argc, char *argv[]) {
+    size_t num_elements = sizeof(tests) / sizeof(struct bpf_test);
+    size_t struct_size = sizeof(struct bpf_test);
+    int nb_total = 0, nb_skipped = 0, ret = 0;
+    const char *directory;
+    struct bpf_insn *prog;
+    char hex_string[52];
+    struct stat info;
+
+    if (argc != 2) {
+        fprintf(stderr, "Usage: %s <directory>\n", argv[0]);
+        return 1;
+    }
+
+    directory = argv[1];
+    if (stat(directory, &info) != 0) {
+        fprintf(stderr, "Directory %s does not exist.\n", directory);
+        return 1;
+    } else if (!S_ISDIR(info.st_mode)) {
+        fprintf(stderr, "Not a directory: %s\n", directory);
+        return 1;
+    }
+
+    for (size_t i = 0; i < num_elements; i++) {
+        char filename[256];
+        FILE *file;
+        int j;
+
+        if (tests[i].kfunc) {
+            fprintf(stderr, "Skipping test %lu due to .kfunc.\n", i);
+            nb_skipped++;
+            continue;
+        } else if (tests[i].fixup_kfunc_btf_id->kfunc) {
+            fprintf(stderr, "Skipping test %lu due to .fixup_kfunc_btf_id.\n", i);
+            nb_skipped++;
+            continue;
+        } else if (*tests[i].fixup_map_kptr) {
+            fprintf(stderr, "Skipping test %lu due to .fixup_map_kptr.\n", i);
+            nb_skipped++;
+            continue;
+        } else if (tests[i].fill_helper) {
+            fprintf(stderr, "Skipping test %lu due to .fill_helper.\n", i);
+            nb_skipped++;
+            continue;
+        } else if (*tests[i].fixup_map_hash_8b || *tests[i].fixup_map_hash_48b ||
+            *tests[i].fixup_map_array_small || *tests[i].fixup_map_array_48b ||
+            *tests[i].fixup_map_event_output) {
+            fprintf(stderr, "Skipping test %lu due to .fixup_map_xxx.\n", i);
+            nb_skipped++;
+            continue;
+        }
+
+        if (!tests[i].prog_type)
+            tests[i].prog_type = BPF_PROG_TYPE_SOCKET_FILTER;
+
+
+        snprintf(filename, sizeof(filename), "%s/bpf_selftest_%lu", directory, i);
+        file = fopen(filename, "w");
+        if (file == NULL) {
+            fprintf(stderr, "Failed to create file: %s\n", filename);
+            return 1;
+        }
+
+        prog = tests[i].insns;
+        tests[i].prog_len = probe_filter_length(prog);
+
+        fprintf(file, "r0 = bpf$PROG_LOAD(0x5, &AUTO={%#x, AUTO, &AUTO=@raw=[", tests[i].prog_type);
+        for (j = 0; j < tests[i].prog_len - 1; j++) {
+            insn_to_hex_string(&prog[j], hex_string);
+            fprintf(file, "@generic=%s, ", hex_string);
+        }
+        if (tests[i].prog_len > 0) {
+            insn_to_hex_string(&prog[j], hex_string);
+            fprintf(file, "@generic=%s", hex_string);
+        }
+        fprintf(file, "]");
+        fprintf(file, ", &AUTO='GPL\\x00', 0x0, 0x0, 0x0, 0x0, 0x0, \"00000000000000000000000000000000\", 0x0, @fallback=%#x, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, @void, @value=AUTO}, 0xa0)\n", tests[i].expected_attach_type);
+        nb_total++;
+        fclose(file);
+    }
+
+    fprintf(stderr, "We skipped %d programs.\n", nb_skipped);
+    fprintf(stderr, "We should expect %d bpf$PROG_LOAD syscalls.\n", nb_total);
+
+    return ret;
+}
