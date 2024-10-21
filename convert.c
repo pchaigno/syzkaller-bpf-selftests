@@ -473,6 +473,10 @@ void insn_to_hex_string(struct bpf_insn *insn, char *hex_string) {
     sprintf(&hex_string[0], "{0x%02x, 0x%01x, 0x%01x, 0x%04x, 0x%08x}", insn->code, insn->dst_reg, insn->src_reg, insn->off, insn->imm);
 }
 
+void map_insn_to_hex_string(struct bpf_insn *insn, uint8_t map, char *hex_string) {
+    sprintf(&hex_string[0], "{AUTO, 0x%01x, AUTO, AUTO, r%d, AUTO, AUTO, AUTO, AUTO}", insn->dst_reg, map);
+}
+
 static struct bpf_test tests[] = {
 #include "verifier/atomic_and.c"
 #include "verifier/atomic_bounds.c"
@@ -535,6 +539,7 @@ int main(int argc, char *argv[]) {
     }
 
     for (size_t i = 0; i < num_elements; i++) {
+        uint8_t metadata[MAX_INSNS] = {0};
         char filename[256];
         FILE *file;
         int j;
@@ -555,12 +560,6 @@ int main(int argc, char *argv[]) {
             fprintf(stderr, "Skipping test %lu due to .fill_helper.\n", i);
             nb_skipped++;
             continue;
-        } else if (*tests[i].fixup_map_hash_8b || *tests[i].fixup_map_hash_48b ||
-            *tests[i].fixup_map_array_small || *tests[i].fixup_map_array_48b ||
-            *tests[i].fixup_map_event_output) {
-            fprintf(stderr, "Skipping test %lu due to .fixup_map_xxx.\n", i);
-            nb_skipped++;
-            continue;
         }
 
         if (!tests[i].prog_type)
@@ -574,13 +573,61 @@ int main(int argc, char *argv[]) {
             return 1;
         }
 
+        int *fixup_map_hash_8b = tests[i].fixup_map_hash_8b;
+        if (*fixup_map_hash_8b) {
+            fprintf(file, "r1 = bpf$MAP_CREATE(AUTO, &AUTO=@base={0x1, 0x8, 0x8, 0x1, 0x1, 0x0, 0x0, \"00000000000000000000000000000000\", 0x0, 0x0, 0x0, 0x0, 0x0, AUTO, @void, @value=AUTO, @void, @value=AUTO}, 0x48)\n");
+            do {
+                metadata[*fixup_map_hash_8b] = 1;
+                fixup_map_hash_8b++;
+            } while (*fixup_map_hash_8b);
+        }
+        int *fixup_map_hash_48b = tests[i].fixup_map_hash_48b;
+        if (*fixup_map_hash_48b) {
+            fprintf(file, "r2 = bpf$MAP_CREATE(AUTO, &AUTO=@base={0x1, 0x8, 0x48, 0x1, 0x1, 0x0, 0x0, \"00000000000000000000000000000000\", 0x0, 0x0, 0x0, 0x0, 0x0, AUTO, @void, @value=AUTO, @void, @value=AUTO}, 0x48)\n");
+            do {
+                metadata[*fixup_map_hash_48b] = 2;
+                fixup_map_hash_48b++;
+            } while (*fixup_map_hash_48b);
+        }
+        int *fixup_map_array_small = tests[i].fixup_map_array_small;
+        if (*fixup_map_array_small) {
+            fprintf(file, "r3 = bpf$MAP_CREATE(AUTO, &AUTO=@base={0x2, 0x4, 0x1, 0x1, 0x0, 0x0, 0x0, \"00000000000000000000000000000000\", 0x0, 0x0, 0x0, 0x0, 0x0, AUTO, @void, @value=AUTO, @void, @value=AUTO}, 0x48)\n");
+            do {
+                metadata[*fixup_map_array_small] = 3;
+                fixup_map_array_small++;
+            } while (*fixup_map_array_small);
+        }
+        int *fixup_map_array_48b = tests[i].fixup_map_array_48b;
+        if (*fixup_map_array_48b) {
+            fprintf(file, "r4 = bpf$MAP_CREATE(AUTO, &AUTO=@base={0x2, 0x4, 0x48, 0x1, 0x0, 0x0, 0x0, \"00000000000000000000000000000000\", 0x0, 0x0, 0x0, 0x0, 0x0, AUTO, @void, @value=AUTO, @void, @value=AUTO}, 0x48)\n");
+            do {
+                metadata[*fixup_map_array_48b] = 4;
+                fixup_map_array_48b++;
+            } while (*fixup_map_array_48b);
+        }
+        int *fixup_map_event_output = tests[i].fixup_map_event_output;
+        if (*fixup_map_event_output) {
+            fprintf(file, "r5 = bpf$MAP_CREATE(AUTO, &AUTO=@base={0x4, 0x4, 0x4, 0x1, 0x0, 0x0, 0x0, \"00000000000000000000000000000000\", 0x0, 0x0, 0x0, 0x0, 0x0, AUTO, @void, @value=AUTO, @void, @value=AUTO}, 0x48)\n");
+            do {
+                metadata[*fixup_map_event_output] = 5;
+                fixup_map_event_output++;
+            } while (*fixup_map_event_output);
+        }
+
         prog = tests[i].insns;
         tests[i].prog_len = probe_filter_length(prog);
 
         fprintf(file, "r0 = bpf$PROG_LOAD(0x5, &AUTO={%#x, AUTO, &AUTO=@raw=[", tests[i].prog_type);
         for (j = 0; j < tests[i].prog_len - 1; j++) {
-            insn_to_hex_string(&prog[j], hex_string);
-            fprintf(file, "@generic=%s, ", hex_string);
+            if (tests[i].prog_len < MAX_INSNS && metadata[j] != 0) {
+                map_insn_to_hex_string(&prog[j], metadata[j], hex_string);
+                fprintf(file, "@map_fd=%s, ", hex_string);
+                /* We can skip the next instruction as BPF_PSEUDO_MAP_FD instructions are on 128-bits. */
+                j++;
+            } else {
+                insn_to_hex_string(&prog[j], hex_string);
+                fprintf(file, "@generic=%s, ", hex_string);
+            }
         }
         if (tests[i].prog_len > 0) {
             insn_to_hex_string(&prog[j], hex_string);
