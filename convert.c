@@ -556,15 +556,15 @@ int main(int argc, char *argv[]) {
             fprintf(stderr, "Skipping test %lu due to .fixup_map_kptr.\n", i);
             nb_skipped++;
             continue;
-        } else if (tests[i].fill_helper) {
-            fprintf(stderr, "Skipping test %lu due to .fill_helper.\n", i);
-            nb_skipped++;
-            continue;
         }
 
         if (!tests[i].prog_type)
             tests[i].prog_type = BPF_PROG_TYPE_SOCKET_FILTER;
 
+        if (tests[i].fill_helper) {
+            tests[i].fill_insns = calloc(MAX_TEST_INSNS, sizeof(struct bpf_insn));
+            tests[i].fill_helper(&tests[i]);
+        }
 
         snprintf(filename, sizeof(filename), "%s/bpf_selftest_%lu", directory, i);
         file = fopen(filename, "w");
@@ -573,49 +573,55 @@ int main(int argc, char *argv[]) {
             return 1;
         }
 
-        int *fixup_map_hash_8b = tests[i].fixup_map_hash_8b;
-        if (*fixup_map_hash_8b) {
-            fprintf(file, "r1 = bpf$MAP_CREATE(AUTO, &AUTO=@base={0x1, 0x8, 0x8, 0x1, 0x1, 0x0, 0x0, \"00000000000000000000000000000000\", 0x0, 0x0, 0x0, 0x0, 0x0, AUTO, @void, @value=AUTO, @void, @value=AUTO}, 0x48)\n");
-            do {
-                metadata[*fixup_map_hash_8b] = 1;
-                fixup_map_hash_8b++;
-            } while (*fixup_map_hash_8b);
-        }
-        int *fixup_map_hash_48b = tests[i].fixup_map_hash_48b;
-        if (*fixup_map_hash_48b) {
-            fprintf(file, "r2 = bpf$MAP_CREATE(AUTO, &AUTO=@base={0x1, 0x8, 0x48, 0x1, 0x1, 0x0, 0x0, \"00000000000000000000000000000000\", 0x0, 0x0, 0x0, 0x0, 0x0, AUTO, @void, @value=AUTO, @void, @value=AUTO}, 0x48)\n");
-            do {
-                metadata[*fixup_map_hash_48b] = 2;
-                fixup_map_hash_48b++;
-            } while (*fixup_map_hash_48b);
-        }
-        int *fixup_map_array_small = tests[i].fixup_map_array_small;
-        if (*fixup_map_array_small) {
-            fprintf(file, "r3 = bpf$MAP_CREATE(AUTO, &AUTO=@base={0x2, 0x4, 0x1, 0x1, 0x0, 0x0, 0x0, \"00000000000000000000000000000000\", 0x0, 0x0, 0x0, 0x0, 0x0, AUTO, @void, @value=AUTO, @void, @value=AUTO}, 0x48)\n");
-            do {
-                metadata[*fixup_map_array_small] = 3;
-                fixup_map_array_small++;
-            } while (*fixup_map_array_small);
-        }
-        int *fixup_map_array_48b = tests[i].fixup_map_array_48b;
-        if (*fixup_map_array_48b) {
-            fprintf(file, "r4 = bpf$MAP_CREATE(AUTO, &AUTO=@base={0x2, 0x4, 0x48, 0x1, 0x0, 0x0, 0x0, \"00000000000000000000000000000000\", 0x0, 0x0, 0x0, 0x0, 0x0, AUTO, @void, @value=AUTO, @void, @value=AUTO}, 0x48)\n");
-            do {
-                metadata[*fixup_map_array_48b] = 4;
-                fixup_map_array_48b++;
-            } while (*fixup_map_array_48b);
-        }
-        int *fixup_map_event_output = tests[i].fixup_map_event_output;
-        if (*fixup_map_event_output) {
-            fprintf(file, "r5 = bpf$MAP_CREATE(AUTO, &AUTO=@base={0x4, 0x4, 0x4, 0x1, 0x0, 0x0, 0x0, \"00000000000000000000000000000000\", 0x0, 0x0, 0x0, 0x0, 0x0, AUTO, @void, @value=AUTO, @void, @value=AUTO}, 0x48)\n");
-            do {
-                metadata[*fixup_map_event_output] = 5;
-                fixup_map_event_output++;
-            } while (*fixup_map_event_output);
+        if (!tests[i].fill_helper) {
+            int *fixup_map_hash_8b = tests[i].fixup_map_hash_8b;
+            if (*fixup_map_hash_8b) {
+                fprintf(file, "r1 = bpf$MAP_CREATE(AUTO, &AUTO=@base={0x1, 0x8, 0x8, 0x1, 0x1, 0x0, 0x0, \"00000000000000000000000000000000\", 0x0, 0x0, 0x0, 0x0, 0x0, AUTO, @void, @value=AUTO, @void, @value=AUTO}, 0x48)\n");
+                do {
+                    metadata[*fixup_map_hash_8b] = 1;
+                    fixup_map_hash_8b++;
+                } while (*fixup_map_hash_8b);
+            }
+            int *fixup_map_hash_48b = tests[i].fixup_map_hash_48b;
+            if (*fixup_map_hash_48b) {
+                fprintf(file, "r2 = bpf$MAP_CREATE(AUTO, &AUTO=@base={0x1, 0x8, 0x48, 0x1, 0x1, 0x0, 0x0, \"00000000000000000000000000000000\", 0x0, 0x0, 0x0, 0x0, 0x0, AUTO, @void, @value=AUTO, @void, @value=AUTO}, 0x48)\n");
+                do {
+                    metadata[*fixup_map_hash_48b] = 2;
+                    fixup_map_hash_48b++;
+                } while (*fixup_map_hash_48b);
+            }
+            int *fixup_map_array_small = tests[i].fixup_map_array_small;
+            if (*fixup_map_array_small) {
+                fprintf(file, "r3 = bpf$MAP_CREATE(AUTO, &AUTO=@base={0x2, 0x4, 0x1, 0x1, 0x0, 0x0, 0x0, \"00000000000000000000000000000000\", 0x0, 0x0, 0x0, 0x0, 0x0, AUTO, @void, @value=AUTO, @void, @value=AUTO}, 0x48)\n");
+                do {
+                    metadata[*fixup_map_array_small] = 3;
+                    fixup_map_array_small++;
+                } while (*fixup_map_array_small);
+            }
+            int *fixup_map_array_48b = tests[i].fixup_map_array_48b;
+            if (*fixup_map_array_48b) {
+                fprintf(file, "r4 = bpf$MAP_CREATE(AUTO, &AUTO=@base={0x2, 0x4, 0x48, 0x1, 0x0, 0x0, 0x0, \"00000000000000000000000000000000\", 0x0, 0x0, 0x0, 0x0, 0x0, AUTO, @void, @value=AUTO, @void, @value=AUTO}, 0x48)\n");
+                do {
+                    metadata[*fixup_map_array_48b] = 4;
+                    fixup_map_array_48b++;
+                } while (*fixup_map_array_48b);
+            }
+            int *fixup_map_event_output = tests[i].fixup_map_event_output;
+            if (*fixup_map_event_output) {
+                fprintf(file, "r5 = bpf$MAP_CREATE(AUTO, &AUTO=@base={0x4, 0x4, 0x4, 0x1, 0x0, 0x0, 0x0, \"00000000000000000000000000000000\", 0x0, 0x0, 0x0, 0x0, 0x0, AUTO, @void, @value=AUTO, @void, @value=AUTO}, 0x48)\n");
+                do {
+                    metadata[*fixup_map_event_output] = 5;
+                    fixup_map_event_output++;
+                } while (*fixup_map_event_output);
+            }
         }
 
-        prog = tests[i].insns;
-        tests[i].prog_len = probe_filter_length(prog);
+        if (tests[i].fill_insns) {
+            prog = tests[i].fill_insns;
+        } else {
+            prog = tests[i].insns;
+            tests[i].prog_len = probe_filter_length(prog);
+        }
 
         fprintf(file, "r0 = bpf$PROG_LOAD(0x5, &AUTO={%#x, AUTO, &AUTO=@raw=[", tests[i].prog_type);
         for (j = 0; j < tests[i].prog_len - 1; j++) {
