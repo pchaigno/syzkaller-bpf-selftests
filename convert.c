@@ -513,8 +513,8 @@ static struct bpf_test tests[] = {
 
 int main(int argc, char *argv[]) {
     size_t num_elements = sizeof(tests) / sizeof(struct bpf_test);
+    int nb_rejected = 0, nb_total = 0, nb_skipped = 0, ret = 0;
     size_t struct_size = sizeof(struct bpf_test);
-    int nb_total = 0, nb_skipped = 0, ret = 0;
     const char *directory;
     struct bpf_insn *prog;
     char hex_string[52];
@@ -587,13 +587,34 @@ int main(int argc, char *argv[]) {
             fprintf(file, "@generic=%s", hex_string);
         }
         fprintf(file, "]");
-        fprintf(file, ", &AUTO='GPL\\x00', 0x0, 0x0, 0x0, 0x0, 0x0, \"00000000000000000000000000000000\", 0x0, @fallback=%#x, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, @void, @value=AUTO}, 0xa0)\n", tests[i].expected_attach_type);
+        fprintf(file, ", &AUTO='GPL\\x00', 0x0, 0x0, 0x0, 0x0, 0x0, \"00000000000000000000000000000000\", 0x0, @fallback=%#x, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, @void, @value=AUTO}, 0xa0)", tests[i].expected_attach_type);
+        if (tests[i].result == REJECT) {
+            if (tests[i].prog_len == 0)
+                fprintf(file, " # E2BIG");
+            else if (strstr(tests[i].errstr, "not an exit") != NULL)
+                fprintf(file, " # EINVAL");
+            else if (strstr(tests[i].errstr, "unknown opcode") != NULL)
+                fprintf(file, " # EINVAL");
+            else if (strstr(tests[i].errstr, "invalid func unknown") != NULL)
+                fprintf(file, " # EINVAL");
+            else if (strstr(tests[i].errstr, "uses reserved") != NULL)
+                fprintf(file, " # EINVAL");
+            else if (strstr(tests[i].errstr, "jump out of range from insn") != NULL)
+                fprintf(file, " # EINVAL");
+            else if (strstr(tests[i].errstr, " is invalid") != NULL)
+                fprintf(file, " # EINVAL");
+            else {
+                fprintf(file, " # EPERM");
+            }
+            nb_rejected++;
+        }
+        fprintf(file, "\n");
         nb_total++;
         fclose(file);
     }
 
     fprintf(stderr, "We skipped %d programs.\n", nb_skipped);
-    fprintf(stderr, "We should expect %d bpf$PROG_LOAD syscalls.\n", nb_total);
+    fprintf(stderr, "We should expect %d/%d erroring syscalls.\n", nb_rejected, nb_total);
 
     return ret;
 }
