@@ -469,6 +469,8 @@ static void bpf_fill_big_prog_with_loop_1(struct bpf_test *self)
     assert(i == len);
 }
 
+#define MAX_SYZ_PROG_SIZE 4 << 20
+
 void insn_to_hex_string(struct bpf_insn *insn, char *hex_string) {
     sprintf(&hex_string[0], "{0x%02x, 0x%01x, 0x%01x, 0x%04x, 0x%08x}", insn->code, insn->dst_reg, insn->src_reg, insn->off, insn->imm);
 }
@@ -664,6 +666,19 @@ int main(int argc, char *argv[]) {
         fprintf(file, "\n");
         nb_total++;
         fclose(file);
+
+        if (stat(filename, &info) != 0) {
+            fprintf(stderr, "File %s does not exist.\n", filename);
+            return 1;
+        }
+        if (info.st_size >= MAX_SYZ_PROG_SIZE) {
+            fprintf(stderr, "Skipping test %lu because the resulting program is too large.\n", i);
+            nb_skipped++;
+            /* Fix up statistics. */
+            if (tests[i].result == REJECT)
+                nb_rejected--;
+            nb_total--;
+        }
     }
 
     fprintf(stderr, "We skipped %d programs.\n", nb_skipped);
