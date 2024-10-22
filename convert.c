@@ -469,6 +469,62 @@ static void bpf_fill_big_prog_with_loop_1(struct bpf_test *self)
     assert(i == len);
 }
 
+/* struct bpf_spin_lock {
+ *   int val;
+ * };
+ * struct val {
+ *   int cnt;
+ *   struct bpf_spin_lock l;
+ * };
+ * struct bpf_timer {
+ *   __u64 :64;
+ *   __u64 :64;
+ * } __attribute__((aligned(8)));
+ * struct timer {
+ *   struct bpf_timer t;
+ * };
+ * struct btf_ptr {
+ *   struct prog_test_ref_kfunc __kptr_untrusted *ptr;
+ *   struct prog_test_ref_kfunc __kptr *ptr;
+ *   struct prog_test_member __kptr *ptr;
+ * }
+ */
+static const char btf_str_sec[] = "\0bpf_spin_lock\0val\0cnt\0l\0bpf_timer\0timer\0t"
+                  "\0btf_ptr\0prog_test_ref_kfunc\0ptr\0kptr\0kptr_untrusted"
+                  "\0prog_test_member";
+static __u32 btf_raw_types[] = {
+    /* int */
+    BTF_TYPE_INT_ENC(0, BTF_INT_SIGNED, 0, 32, 4),  /* [1] */
+    /* struct bpf_spin_lock */                      /* [2] */
+    BTF_TYPE_ENC(1, BTF_INFO_ENC(BTF_KIND_STRUCT, 0, 1), 4),
+    BTF_MEMBER_ENC(15, 1, 0), /* int val; */
+    /* struct val */                                /* [3] */
+    BTF_TYPE_ENC(15, BTF_INFO_ENC(BTF_KIND_STRUCT, 0, 2), 8),
+    BTF_MEMBER_ENC(19, 1, 0), /* int cnt; */
+    BTF_MEMBER_ENC(23, 2, 32),/* struct bpf_spin_lock l; */
+    /* struct bpf_timer */                          /* [4] */
+    BTF_TYPE_ENC(25, BTF_INFO_ENC(BTF_KIND_STRUCT, 0, 0), 16),
+    /* struct timer */                              /* [5] */
+    BTF_TYPE_ENC(35, BTF_INFO_ENC(BTF_KIND_STRUCT, 0, 1), 16),
+    BTF_MEMBER_ENC(41, 4, 0), /* struct bpf_timer t; */
+    /* struct prog_test_ref_kfunc */        /* [6] */
+    BTF_STRUCT_ENC(51, 0, 0),
+    BTF_STRUCT_ENC(95, 0, 0),           /* [7] */
+    /* type tag "kptr_untrusted" */
+    BTF_TYPE_TAG_ENC(80, 6),            /* [8] */
+    /* type tag "kptr" */
+    BTF_TYPE_TAG_ENC(75, 6),            /* [9] */
+    BTF_TYPE_TAG_ENC(75, 7),            /* [10] */
+    BTF_PTR_ENC(8),                 /* [11] */
+    BTF_PTR_ENC(9),                 /* [12] */
+    BTF_PTR_ENC(10),                /* [13] */
+    /* struct btf_ptr */                /* [14] */
+    BTF_STRUCT_ENC(43, 3, 24),
+    BTF_MEMBER_ENC(71, 11, 0), /* struct prog_test_ref_kfunc __kptr_untrusted *ptr; */
+    BTF_MEMBER_ENC(71, 12, 64), /* struct prog_test_ref_kfunc __kptr *ptr; */
+    BTF_MEMBER_ENC(71, 13, 128), /* struct prog_test_member __kptr *ptr; */
+};
+
 #define MAX_SYZ_PROG_SIZE 4 << 20
 
 void insn_to_hex_string(struct bpf_insn *insn, char *hex_string) {
@@ -477,6 +533,47 @@ void insn_to_hex_string(struct bpf_insn *insn, char *hex_string) {
 
 void map_insn_to_hex_string(struct bpf_insn *insn, uint8_t map, char *hex_string) {
     sprintf(&hex_string[0], "{AUTO, 0x%01x, AUTO, AUTO, r%d, AUTO, AUTO, AUTO, AUTO}", insn->dst_reg, map);
+}
+
+void btf_load_to_hex_string(uint8_t *raw_btf, size_t btf_size, char *hex_string) {
+    for (size_t i = 0; i < btf_size; i++) {
+        sprintf(&hex_string[i * 2], "%02x", raw_btf[i]);
+    }
+    hex_string[btf_size * 2] = '\0';
+}
+
+void load_btf(FILE *file) {
+    struct btf_header hdr = {
+        .magic = BTF_MAGIC,
+        .version = BTF_VERSION,
+        .hdr_len = sizeof(struct btf_header),
+        .type_len = sizeof(btf_raw_types),
+        .str_off = sizeof(btf_raw_types),
+        .str_len = sizeof(btf_str_sec),
+    };
+    void *ptr, *raw_btf;
+    char *hex_string;
+    size_t btf_size;
+    int btf_fd;
+
+    btf_size = sizeof(hdr) + hdr.type_len + hdr.str_len;
+    raw_btf = malloc(btf_size);
+
+    ptr = raw_btf;
+    memcpy(ptr, &hdr, sizeof(hdr));
+    ptr += sizeof(hdr);
+    memcpy(ptr, btf_raw_types, hdr.type_len);
+    ptr += hdr.type_len;
+    memcpy(ptr, btf_str_sec, hdr.str_len);
+    ptr += hdr.str_len;
+
+    hex_string = (char *)malloc(btf_size * 2 + 1);
+    btf_load_to_hex_string(raw_btf, btf_size, hex_string);
+
+    fprintf(file, "r6 = bpf$BPF_BTF_LOAD(AUTO, &AUTO={&AUTO=ANY=[@ANYBLOB=\"%s\"], 0x0, %#lx, 0x0, 0x0, 0x0, 0x0, @void, @value=AUTO}, AUTO)\n", hex_string, btf_size);
+
+    free(hex_string);
+    free(raw_btf);
 }
 
 static struct bpf_test tests[] = {
@@ -554,10 +651,6 @@ int main(int argc, char *argv[]) {
             fprintf(stderr, "Skipping test %lu due to .fixup_kfunc_btf_id.\n", i);
             nb_skipped++;
             continue;
-        } else if (*tests[i].fixup_map_kptr) {
-            fprintf(stderr, "Skipping test %lu due to .fixup_map_kptr.\n", i);
-            nb_skipped++;
-            continue;
         }
 
         if (!tests[i].prog_type)
@@ -568,7 +661,7 @@ int main(int argc, char *argv[]) {
             tests[i].fill_helper(&tests[i]);
         }
 
-        snprintf(filename, sizeof(filename), "%s/bpf_selftest_%lu", directory, i);
+        snprintf(filename, sizeof(filename), "%s/bpf_selftest_%ld", directory, i);
         file = fopen(filename, "w");
         if (file == NULL) {
             fprintf(stderr, "Failed to create file: %s\n", filename);
@@ -602,7 +695,7 @@ int main(int argc, char *argv[]) {
             }
             int *fixup_map_array_48b = tests[i].fixup_map_array_48b;
             if (*fixup_map_array_48b) {
-                fprintf(file, "r4 = bpf$MAP_CREATE(AUTO, &AUTO=@base={0x2, 0x4, 0x48, 0x1, 0x0, 0x0, 0x0, \"00000000000000000000000000000000\", 0x0, 0x0, 0x0, 0x0, 0x0, AUTO, @void, @value=AUTO, @void, @value=AUTO}, 0x48)\n");
+                fprintf(file, "r4 = bpf$MAP_CREATE(AUTO, &AUTO=@base={0x2, 0x4, 0x30, 0x1, 0x0, 0x0, 0x0, \"00000000000000000000000000000000\", 0x0, 0x0, 0x0, 0x0, 0x0, AUTO, @void, @value=AUTO, @void, @value=AUTO}, 0x48)\n");
                 do {
                     metadata[*fixup_map_array_48b] = 4;
                     fixup_map_array_48b++;
@@ -615,6 +708,15 @@ int main(int argc, char *argv[]) {
                     metadata[*fixup_map_event_output] = 5;
                     fixup_map_event_output++;
                 } while (*fixup_map_event_output);
+            }
+            int *fixup_map_kptr = tests[i].fixup_map_kptr;
+            if (*fixup_map_kptr) {
+                load_btf(file); // Defines r6.
+                fprintf(file, "r7 = bpf$MAP_CREATE(AUTO, &AUTO=@base={0x2, 0x4, 0x18, 0x1, 0x0, 0x0, 0x0, \"00000000000000000000000000000000\", 0x0, r6, 0x1, 0xe, 0x0, AUTO, @void, @value=AUTO, @void, @value=AUTO}, AUTO)\n");
+                do {
+                    metadata[*fixup_map_kptr] = 7;
+                    fixup_map_kptr++;
+                } while (*fixup_map_kptr);
             }
         }
 
@@ -674,6 +776,10 @@ int main(int argc, char *argv[]) {
         if (info.st_size >= MAX_SYZ_PROG_SIZE) {
             fprintf(stderr, "Skipping test %lu because the resulting program is too large.\n", i);
             nb_skipped++;
+            if (remove(filename)) {
+                fprintf(stderr, "Failed to remove too large file %s.\n", filename);
+                return 1;
+            }
             /* Fix up statistics. */
             if (tests[i].result == REJECT)
                 nb_rejected--;
